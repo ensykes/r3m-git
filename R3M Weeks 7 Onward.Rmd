@@ -452,7 +452,7 @@ petroleum_and_natural_gas_systems_processing)) %>%
 
 ghgrp_2019_emissions_process_long
 
-#this works! now I could do summaries based on emissions of particular gasses or from particular processes by facility, geography, or industry if I wanted. 
+#this works! now I could do summaries based on emissions of particular gasses or from particular processes by facility, geography, or industry if I wanted
 
 
 ```
