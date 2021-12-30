@@ -1,0 +1,614 @@
+---
+title: "R3M Week 4 Assignment"
+author: "Elan Sykes"
+date: "10/13/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+This report will load and describe data from the EPA's Greenhouse Gas Reporting Program. I'm downloading the data from EPA's website as an excel file and visualizing some of the data to practice the new skills for week 4. New work for week 4 starts at the header "Time for some visualizations". New work for week 7 starts at the header "R in 3 Months Advanced Sections".
+
+# Loading Packages and Importing Data
+
+```{r}
+# Loading packages
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(readxl)
+library(ggplot2)
+library(ggbeeswarm)
+library(ggthemes)
+library(hrbrthemes)
+library(usethis)
+library(patchwork)
+library(ggrepel)
+
+##Bringing in downloaded data from: https://www.epa.gov/ghgreporting/data-sets
+
+#Using the readxl package guidance to help me read the third row as the names of the columns
+#based on https://readxl.tidyverse.org/articles/articles/multiple-header-rows.html
+
+ghgrp_cnames <- read_excel("data/2019_data_summary_spreadsheets/ghgp_data_2019.xlsx", 
+                         sheet = 1, skip = 3, n_max = 1) %>% 
+  names()
+  
+#Testing, this will display the correct column names from the original spreadsheet's 4th row:
+ghgrp_cnames
+
+```
+
+Note: this method works for the main column names, but loses some info in the row above the names for categories of columns. I still need to ask about this. Now I will have R read the actual data entries from the sheet using these column names.
+
+
+```{r}
+#Creating the dataframe ghgrp_2019 from the first sheet of the downloaded excel file, starting with the row where the individual entries start, and assigning the column names to the new list I made in the chunk above.
+
+ghgrp_2019 <- read_excel("data/2019_data_summary_spreadsheets/ghgp_data_2019.xlsx", 
+                         sheet = 1, skip = 4, col_names = ghgrp_cnames) %>% 
+  clean_names()
+
+```
+
+
+# Basic Data Examination
+
+This section is just about displaying the most basic outputs R and the skimr package will give me. Note that all emissions data is presented in units of mTCO~2~e (metric Tons of CO~2~-equivalent) using the IPCC AR4's GWP values.
+```{r}
+#Basic Data Examination:
+ghgrp_2019
+
+skim(ghgrp_2019)
+```
+
+Next, some simple analysis using the tidyverse wrangling verbs:
+
+```{r}
+#Trying select() first, selecting facilities by ID number and name along with total reported direct emissions
+ghgrp_2019 %>% 
+  select(facility_id, facility_name, total_reported_direct_emissions)
+```
+
+Next, I'm going to try the mutate function. I want to make a variable that represents all non-CO~2~ GHG emissions (specifically, all GHGs excluding *non-biogenic* CO~2~).
+
+```{r}
+#Mutate 
+
+ghgrp_2019_no_NAs_in_reported_emissions <- ghgrp_2019 %>% 
+  mutate(across(co2_emissions_non_biogenic:biogenic_co2_emissions_metric_tons, ~replace_na(.x, 0)))
+
+ghgrp_19_total_non_co2_emissions <- ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  mutate("total_non_co2_emissions" = total_reported_direct_emissions - co2_emissions_non_biogenic) %>%
+  select(facility_id, facility_name, state, total_reported_direct_emissions, co2_emissions_non_biogenic, total_non_co2_emissions)
+
+ghgrp_19_total_non_co2_emissions
+
+skim(ghgrp_19_total_non_co2_emissions)
+```
+
+Following Charlie's feedback and the live session, I got this stuff to work after last week. Thanks Charlie and David! 
+
+## Basic Visualization First Tries
+
+```{r}
+#Starting off with the extremely basic:
+
+ggplot(data = ghgrp_2019_no_NAs_in_reported_emissions,
+       mapping = aes(x = total_reported_direct_emissions)) +
+  geom_histogram() +
+  theme_economist()
+
+ggplot(data = ghgrp_2019_no_NAs_in_reported_emissions,
+       mapping = aes(x = total_reported_direct_emissions)) +
+  geom_histogram(bins = 100) +
+  theme_economist()
+
+ggplot(data = ghgrp_2019_no_NAs_in_reported_emissions,
+       mapping = aes(x = total_reported_direct_emissions)) +
+  geom_histogram(bins = 1000) +
+  theme_economist()
+
+```
+
+This works, but the x axis looks terrible in scientific notation. Now to try and get it to work with listed-out numbers:
+
+```{r}
+
+#Figured out that the scale_x line is where there's an option to avoid scientific notation and even to require commas in the larger numbers
+ggplot(data = ghgrp_2019_no_NAs_in_reported_emissions,
+       mapping = aes(x = total_reported_direct_emissions)) +
+  geom_histogram(bins = 1000) +
+  scale_x_continuous(labels =  scales::label_comma())+
+  labs(title = "Number of Facilities Reporting at Each Level of Emissions",
+       x = "Reported GHG Emissions in Metric Tons of CO2 Equivalent",
+       y = "n Facilities") +
+  theme_economist()
+```
+
+Ok, that looks weird but fine. There's at least 1 facility reported around 19MMT, but it's hard to see the facilities above 2.5MMT/year.
+
+# Visualization
+
+## Experimental Visualizations: Messing Around
+
+```{r}
+#Time for some experimental stuff: 
+ggplot(data = ghgrp_2019_no_NAs_in_reported_emissions,
+       mapping = aes(x = state,
+                     y = total_reported_direct_emissions)) +
+  geom_beeswarm() +
+  scale_y_continuous(labels =  scales::label_comma()) +
+  theme_wsj()
+```
+
+The dataviz value of this plot might as well be 0, but I wanted to test it out. Clearly, plotting these huge values across a wide range or divided up into states isn't giving me comprehensible results. I'm going to work on some summarizing and filtering visualizations to give myself reason to play around with them more. 
+
+## Just Hoping for more comprehensible plots now, with some data wrangling built in
+
+```{r}
+#Grouping by state, creating a summary of all reported direct emissions for all facilities in each state, and plotting by column. 
+
+ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  select(state, total_reported_direct_emissions) %>% 
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions)) %>% 
+  select(state, total_reported_state_emissions) %>% 
+  arrange(desc(total_reported_state_emissions)) %>% 
+  ggplot(mapping = aes(x = state,
+                       y = total_reported_state_emissions)) +
+  geom_col()+
+   scale_y_continuous(labels =  scales::label_comma())+
+  theme_minimal()
+```
+
+I wanted the columns to be sorted in descending order by total emissions, but this seems hard. I also want to know how to angle the x axis labels at 45 degrees, but not going to mess with this yet. 
+
+Now, to try another plot type that I think is more suited to facility-level data: scatterplots. 
+
+```{r}
+#Now a plot of all co2 emissions against total emissions, for every facility
+ggplot(data = ghgrp_19_total_non_co2_emissions,
+       mapping = aes(x = co2_emissions_non_biogenic,
+                     y = total_reported_direct_emissions)) +
+  geom_point()+
+  scale_x_continuous(labels =  scales::label_comma())+
+  scale_y_continuous(labels =  scales::label_comma())+
+  labs(title = "All US Facilities",
+       x = "Total CO2 Emissions",
+       y = "Total Reported Emissions") +
+  theme_economist_white()
+```
+
+This plot doesn't tell me much, because most facilities with high total emissions are mainly emitting non-biogenic CO~2~.
+
+
+```{r}
+# Making the same plot but with co2 and total non-co2 rather than co2 and actual total
+
+ggplot(data = ghgrp_19_total_non_co2_emissions,
+       mapping = aes(x = co2_emissions_non_biogenic,
+                     y = total_non_co2_emissions)) +
+    geom_point() +
+  scale_x_continuous(labels =  scales::label_comma())+
+  scale_y_continuous(labels =  scales::label_comma())+
+  labs(title = "All US Facilities",
+       x = "Total CO2 Emissions",
+       y = "Total Non-CO2 Emissions") +
+  theme_ipsum()
+```
+
+This one tells me more, at least. 
+
+## Some more wrangling and plotting
+
+Is there any downside to a workflow of wrangling data, then piping into ggplot as opposed to wrangling, saving the data by assigning it to new dataframes/tibbles, and then plotting it?
+
+```{r}
+# Some more wrangling into plotting
+
+#Listing states by number of reporting facilities in descending order
+ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  count(state) %>% 
+  arrange(desc(n))
+#Not sure what to do with this info yet
+
+# This should be pulling together the total emissions, total co2 emissions, and total non-co2 emissions for each state, arranged in descending order of total emissions
+ghgrp_19_total_non_co2_emissions %>%  
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions),
+            total_state_co2 = sum(co2_emissions_non_biogenic),
+            total_state_non_co2 = sum(total_non_co2_emissions)) %>% 
+  select(state, total_reported_state_emissions, total_state_co2, total_state_non_co2) %>% 
+  arrange(desc(total_reported_state_emissions))
+```
+
+Great! This is a slightly more plottable and useful dataframe for messing around with. 
+
+```{r}
+# Assigning this summary to a new dataframe
+ghgrp_2019_state_summary <- ghgrp_19_total_non_co2_emissions %>%  
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions),
+            total_state_co2 = sum(co2_emissions_non_biogenic),
+            total_state_non_co2 = sum(total_non_co2_emissions)) %>% 
+  select(state, total_reported_state_emissions, total_state_co2, total_state_non_co2) %>% 
+  arrange(desc(total_reported_state_emissions))
+
+ghgrp_2019_state_summary
+```
+
+## Plotting with Summarized State Data
+
+```{r}
+#Plotting every state in terms of total state emissions of CO2 and other GHGs:
+ggplot(data = ghgrp_2019_state_summary,
+       mapping = aes(x=total_state_co2,
+                     y = total_state_non_co2,
+                     color = state)) +
+  geom_text(aes(label = state),
+            show.legend = FALSE)+
+  labs(title = "Total GHG Emissions for Each US State",
+       x = "Total CO2 Emissions",
+       y = "Total Non-CO2 Emissions")+
+  scale_x_continuous(labels =  scales::label_comma())+
+  scale_y_continuous(labels =  scales::label_comma())+
+  theme_minimal()
+```
+
+Ok, aesthetically this plot is weird but not as big of a mess as my attempts up top. There are too many states for a plot like this to tell me much without a specific insight I'm trying to show. Let's just pick the top 10 states. 
+
+```{r}
+#Picking out the top 10 states by total emissions
+head(ghgrp_2019_state_summary, n = 10, add_rownames(ghgrp_2019_state_summary, var = "state"))
+
+# Plotting these, with some adjustments to the labels and scales and such:
+ghgrp_2019_state_summary %>% 
+  head(n = 10, add_rownames(ghgrp_2019_state_summary, var = "state")) %>% 
+  ggplot(mapping = aes(x=total_state_co2,
+                     y = total_state_non_co2,
+                     color = state)) +
+  geom_text(aes(label = state),
+            show.legend = FALSE)+
+  scale_x_continuous(labels =  scales::label_comma(),
+                     limits = c(0, 400000000),
+                     breaks = seq(0, 400000000, by = 100000000))+
+  scale_y_continuous(labels =  scales::label_comma(),
+                     limits = c(0, 18000000),
+                     breaks = seq(0, 18000000, by = 2000000))+
+  theme_minimal()+
+  labs(title = "Total Reported CO~2~ and non-CO~2~ Emissions for the Top 10 Highest-Emitting States",
+       x = "Total Reported Non-Biogenic CO~2~ Emissions, mT",
+       y = "Total Reported Non-CO~2~ Emissions, mTCO~2~e")
+
+```
+
+I wanted to make the axis labels show CO2 as CO~2~ as I learned in previous lessons, but it didn't work. I also don't know why the Title gets cut off when the Rmd file knits. 
+
+
+At least I got this to show me what I wanted in terms of the data, using the head() function. My biggest problem is that even now that I have the data wrangled and know how to wrangle and visualize, it's very hard to decide what to try and visualize unguided! 
+
+## One More Idea: Facets for All Facilities by State
+
+Plotting every facility in the country made the scatterplots a mess. But with faceting, I can make plots for every facility separated by state really quickly. 
+
+First, the plot of all facilities from above:
+
+```{r}
+#Plot from line 181
+ggplot(data = ghgrp_19_total_non_co2_emissions,
+       mapping = aes(x = co2_emissions_non_biogenic,
+                     y = total_non_co2_emissions)) +
+    geom_point() +
+  scale_x_continuous(labels =  scales::label_comma())+
+  scale_y_continuous(labels =  scales::label_comma())+
+  labs(title = "All US Facilities",
+       x = "Total CO2 Emissions",
+       y = "Total Non-CO2 Emissions") +
+  theme_ipsum()
+```
+
+
+```{r}
+# Now to facet by 50 states plus a few territories, what could go wrong?
+ggplot(data = ghgrp_19_total_non_co2_emissions,
+       mapping = aes(x = co2_emissions_non_biogenic,
+                     y = total_non_co2_emissions)) +
+    geom_point() +
+  scale_x_continuous(labels =  scales::label_comma())+
+  scale_y_continuous(labels =  scales::label_comma())+
+  labs(title = "All US Facilities",
+       x = "Total CO2 Emissions, mT",
+       y = "Total Non-CO2 Emissions, mTCO2e") +
+  facet_wrap(~state)+
+  theme_minimal()
+```
+
+I'd love to be able to arrange these facets in the shape of the US and adjust their sizes and axes to be more readable as this output, but this is good enough for now. The axis labels and everything look terrible, but at least it works!
+
+Going to select out a few states just to simplify and see if it appears better:
+
+```{r}
+#Same code as above, filtering for a few states chosen at random
+ghgrp_19_total_non_co2_emissions %>% 
+  filter(state == "TX" | state == "CA" | state == "NY" | state == "MA" | state == "UT" | state == "AK") %>% 
+ggplot(mapping = aes(x = co2_emissions_non_biogenic,
+                     y = total_non_co2_emissions)) +
+    geom_point() +
+  scale_x_continuous(labels =  scales::label_comma())+
+  scale_y_continuous(labels =  scales::label_comma())+
+  labs(title = "GHGRP-Mandated Reporting Facilities, Select US States",
+       x = "Total CO2 Emissions, mT",
+       y = "Total Non-CO2 Emissions, mTCO2e") +
+  facet_wrap(~state)+
+  theme_economist()
+```
+
+That's much more comprehensible! I don't know if there's a simpler way to write the filtering code to pick from a list rather than typing out the "state == x | state == y" etc business, but I should look this up. 
+
+One last idea is to plot every state in a scatter for number of facilities and total emissions by state. Since I already made the dataframe ghgrp_2019_state_summary, I want to add number of facilities in each state to this frame. I'm not sure if I should add this to the code above creating that dataframe, adding it and reassigning here, or creating a new dataframe and binding them. We haven't learned binding, so I'm just going to take the code for counting above, the code creating and assigning the state summary dataframe, and reworking it here with a new name so I don't screw things up. 
+
+```{r}
+# Here was the code creating ghgrp_2019_state_summary
+ghgrp_19_total_non_co2_emissions %>%  
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions),
+            total_state_co2 = sum(co2_emissions_non_biogenic),
+            total_state_non_co2 = sum(total_non_co2_emissions)) %>% 
+  select(state, total_reported_state_emissions, total_state_co2, total_state_non_co2) %>% 
+  arrange(desc(total_reported_state_emissions))
+
+#I'm not sure where to add the code mutating the n_facilities variable into this series of pipes. Here's the code creating a count of facilities in each state:
+
+ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  count(state) %>% 
+  mutate(n_facilities = n) %>% 
+  select(state, n_facilities)
+
+#I was going to add this to the pipe series, but I couldn't get it to work without messing something up. 
+
+#Creating a new dataframe by assigning the above code
+ghgrp_2019_n_facilities_by_state <- ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  count(state) %>% 
+  mutate(n_facilities = n) %>% 
+  select(state, n_facilities)
+
+ghgrp_2019_n_facilities_by_state
+
+#Going to have to join it, I think, based on the dplyr cheatsheet
+# Joining, piping, then plotting
+
+left_join(ghgrp_2019_state_summary, ghgrp_2019_n_facilities_by_state, by = "state") %>% 
+  ggplot(mapping = aes(x=n_facilities,
+                       y = total_reported_state_emissions,
+                       color = state)) +
+  geom_text(aes(label = state),
+            show.legend = FALSE)+
+  scale_y_continuous(labels =  scales::label_comma()) +
+  labs(title = "US States by Number of GHGRP Reporting Facilities and Total State Emissions",
+       x = "Number of Mandated Reporting Facilities",
+       y = "Total Reported Direct Emissions, mTCO2e")+
+  theme_minimal()
+
+```
+
+This works, but with the same caveat that plotting every state by name in a text scatterplot is pretty messy. 
+
+# Weeks 1-4 Conclusion
+Now that I've done all of these, I realize that I also want to generate a variable for the average emissions per facility for each state and plot that along with n_facilities, but I'm not sure where I'd want to add that into the code. I' m just going to conclude for the week here, and spend some time between now and the next substantive assignment thinking about what actually I want from this data and whether I should be using a different dataset to get more value out of the exercises. 
+
+# R in 3 Months Advanced Sections
+
+## Week 7
+
+Going to pivot the emissions-by-gas data from wide data into long form, where each emissions value is its own observation. This isn't really so important for any analysis, I'm just doing it to demonstrate the concept.
+
+```{r}
+
+ghgrp_2019_no_NAs_in_reported_emissions
+
+
+# pivoting longer so each facility's emissions of each type (and total) are their own row with a value for co2e emissions
+ghgrp_2019_emissions_type_long <- ghgrp_2019_no_NAs_in_reported_emissions %>% 
+select(facility_id:biogenic_co2_emissions_metric_tons) %>% 
+pivot_longer(cols = total_reported_direct_emissions:biogenic_co2_emissions_metric_tons,
+             names_to = "emission_gas_type",
+             values_to = "emissions_value_co2e")
+
+ghgrp_2019_emissions_type_long
+
+# separating industry type subpart values into multiple rows
+ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  separate_rows(industry_type_subparts)
+
+ghgrp_2019_emissions_type_long%>% 
+  separate_rows(industry_type_subparts)
+
+#pivoting longer on emissions by process
+ghgrp_2019_emissions_process_ready_to_be_reshaped_long <- ghgrp_2019_no_NAs_in_reported_emissions %>%
+  select(facility_id:total_reported_direct_emissions, stationary_combustion:petroleum_and_natural_gas_systems_lng_import_export) %>%
+  mutate(across(stationary_combustion:petroleum_and_natural_gas_systems_lng_import_export, ~replace_na(.x, 0))) %>% 
+  mutate(petroleum_and_natural_gas_systems_offshore_production = as.numeric(petroleum_and_natural_gas_systems_offshore_production)) %>% 
+  mutate(petroleum_and_natural_gas_systems_processing = as.numeric(
+petroleum_and_natural_gas_systems_processing)) %>% 
+  mutate(petroleum_and_natural_gas_systems_transmission_compression = as.numeric(petroleum_and_natural_gas_systems_transmission_compression)) %>% 
+  mutate(petroleum_and_natural_gas_systems_underground_storage = as.numeric(petroleum_and_natural_gas_systems_underground_storage)) %>% 
+  mutate(petroleum_and_natural_gas_systems_lng_storage = as.numeric(petroleum_and_natural_gas_systems_lng_storage))
+#in the above code, I tried to select multiple variables using mutate(across(stationary_combustion:petroleum_and_natural_gas_systems_lng_import_export, as.numeric(.))), and mutate_at(vars(stationary_combustion:petroleum_and_natural_gas_systems_lng_import_export), as.numeric()) to change all the petroleum columns to numeric at once but I couldn't get them to work. Would be helpful to figure out with more time. 
+  
+   
+
+
+
+ghgrp_2019_emissions_process_long <- ghgrp_2019_no_NAs_in_reported_emissions %>%
+  select(facility_id:total_reported_direct_emissions, stationary_combustion:petroleum_and_natural_gas_systems_lng_import_export) %>%
+  mutate(across(stationary_combustion:petroleum_and_natural_gas_systems_lng_import_export, ~replace_na(.x, 0))) %>% 
+  mutate(petroleum_and_natural_gas_systems_offshore_production = as.numeric(petroleum_and_natural_gas_systems_offshore_production)) %>% 
+  mutate(petroleum_and_natural_gas_systems_processing = as.numeric(
+petroleum_and_natural_gas_systems_processing)) %>% 
+  mutate(petroleum_and_natural_gas_systems_transmission_compression = as.numeric(petroleum_and_natural_gas_systems_transmission_compression)) %>% 
+  mutate(petroleum_and_natural_gas_systems_underground_storage = as.numeric(petroleum_and_natural_gas_systems_underground_storage)) %>% 
+  mutate(petroleum_and_natural_gas_systems_lng_storage = as.numeric(petroleum_and_natural_gas_systems_lng_storage)) %>% pivot_longer(cols = stationary_combustion:petroleum_and_natural_gas_systems_lng_import_export,
+             names_to = "emission_process_type",
+             values_to = "emissions_value_co2e")
+
+ghgrp_2019_emissions_process_long
+
+#this works! now I could do summaries based on emissions of particular gasses or from particular processes by facility, geography, or industry if I wanted
+
+
+```
+
+## Week 8
+
+Testing some function ideas. Maybe looking at facilities by state and emissions gas or emissions by process to produce quick summary tables for any given state. 
+
+
+```{r}
+
+# testing a data summary idea to turn into a function
+
+## separating industry type sectors and filtering by state and gas type of emissions (for CO2 non-biogenic emissions since this is most relevant for work)
+
+ghgrp_2019_emissions_type_long %>% 
+  separate_rows(industry_type_sectors, sep = ",")%>% 
+  filter(state == "TX") %>% 
+  filter(emission_gas_type == "co2_emissions_non_biogenic") %>% 
+  group_by(industry_type_sectors) %>% 
+  summarize(mean_facility_co2_emissions_by_industry = mean(emissions_value_co2e)) %>% 
+  ungroup() %>% 
+  arrange(desc(mean_facility_co2_emissions_by_industry)) %>% 
+  mutate(state = "TX")
+
+#Not sure if mutating a new column to put the state variable back in is the most efficient way to do this, is there a way to keep it when summarizing by a group?
+# Do I need to ungroup here?
+
+# Function doing the same work here, customizable for any state with the state_of_choice argument
+state_mean_reporting_facility_co2_emissions_by_process <- function(state_of_choice){
+  ghgrp_2019_emissions_type_long %>% 
+  separate_rows(industry_type_sectors, sep = ",")%>% 
+  filter(state == state_of_choice) %>% 
+  filter(emission_gas_type == "co2_emissions_non_biogenic") %>% 
+  group_by(industry_type_sectors) %>% 
+  summarize(mean_facility_co2_emissions_by_industry = mean(emissions_value_co2e)) %>% 
+  arrange(desc(mean_facility_co2_emissions_by_industry)) %>% 
+  mutate(state = state_of_choice)
+}
+
+state_mean_reporting_facility_co2_emissions_by_process(state_of_choice = "TX")
+  
+
+```
+
+
+## Week 10: Advanced Viz
+
+Earlier I wrote: "I wanted the columns to be sorted in descending order by total emissions, but this seems hard. I also want to know how to angle the x axis labels at 45 degrees, but not going to mess with this yet." Now, I know how to do this. 
+
+```{r}
+
+# Earlier viz 
+ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  select(state, total_reported_direct_emissions) %>% 
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions)) %>% 
+  select(state, total_reported_state_emissions) %>% 
+  arrange(desc(total_reported_state_emissions)) %>% 
+  ggplot(mapping = aes(x = state,
+                       y = total_reported_state_emissions)) +
+  geom_col()+
+   scale_y_continuous(labels =  scales::label_comma())+
+  theme_minimal()
+
+# the arrange line was trying to do this, but it didn't work. Now I know how to do it
+
+# Ordering with fct_reorder()
+
+ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  select(state, total_reported_direct_emissions) %>% 
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions)) %>% 
+  select(state, total_reported_state_emissions) %>% 
+  mutate(state = fct_reorder(state, total_reported_state_emissions)) %>% 
+  ggplot(mapping = aes(x = state,
+                       y = total_reported_state_emissions)) +
+  geom_col()+
+  coord_flip()+
+  scale_y_continuous(labels =  scales::label_comma())+
+  labs(title = "Total Reported Emissions by State, CO2e in 2019")+
+  theme_minimal()+
+  theme(axis.title = element_blank())
+
+
+# Creating a highlight dataset and plot layer for a randomly chosen state
+
+ghgrp_2019_plot_highlight_GA <- ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  select(state, total_reported_direct_emissions) %>% 
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions)) %>% 
+  select(state, total_reported_state_emissions) %>% 
+  filter(state == "GA")
+
+# Plotting with the highlight layer
+
+ghgrp_2019_no_NAs_in_reported_emissions %>% 
+  select(state, total_reported_direct_emissions) %>% 
+  group_by(state) %>% 
+  summarize(total_reported_state_emissions = sum(total_reported_direct_emissions)) %>% 
+  select(state, total_reported_state_emissions) %>% 
+  mutate(state = fct_reorder(state, total_reported_state_emissions)) %>% 
+  ggplot(mapping = aes(x = state,
+                       y = total_reported_state_emissions)) +
+  geom_col()+
+  geom_col(data = ghgrp_2019_plot_highlight_GA,
+           inherit.aes = TRUE,
+           fill = "Red")+
+  coord_flip()+
+  scale_y_continuous(labels =  scales::label_comma())+
+  labs(title = "Georgia's Total Reported Emissions vs all US States, metric tons CO2e in 2019")+
+  theme_minimal()+
+  theme(axis.title = element_blank())
+
+
+```
+
+## Week 11
+
+```{r}
+
+#this is a bad viz:
+ghgrp_2019_emissions_process_long %>% 
+  filter(state == "RI") %>% 
+  ggplot()+
+  geom_beeswarm(aes(x = industry_type_sectors,
+                    y = emissions_value_co2e))
+
+#older viz that I wanted to make changes on
+ghgrp_2019_state_summary %>% 
+  head(n = 10, add_rownames(ghgrp_2019_state_summary, var = "state")) %>% 
+  ggplot(mapping = aes(x=total_state_co2,
+                     y = total_state_non_co2),
+         show.legend = FALSE) +
+  geom_point(aes(color = state),  show.legend = FALSE)+
+  geom_text_repel(aes(label = state),
+            show.legend = FALSE)+
+  scale_color_brewer(palette = "Set3")+
+  scale_x_continuous(labels =  scales::label_comma(),
+                     limits = c(0, 400000000),
+                     breaks = seq(0, 400000000, by = 100000000))+
+  scale_y_continuous(labels =  scales::label_comma(),
+                     limits = c(0, 18000000),
+                     breaks = seq(0, 18000000, by = 2000000))+
+  theme(legend.position = "none") +
+  theme_minimal(base_family = "Roboto") +
+  labs(title = (expression(paste("Total Reported ", CO[2], " and non-", CO[2], " Emissions for the Top 10 Highest-Emitting States"))),
+       x = (expression(paste("Total Reported Non-Biogenic ", CO[2], " Emissions, mT"))),
+       y = (expression(paste("Total Reported Non-", CO[2], " Emissions, mT", CO[2], "e"))))
+
+# Do I need to do this whole expression(paste()) business to get subscripts into my titles? Is there an easier way?
+# And why does this make it so much harder to put a "\n" in as a line break to break up the title line?
+```
+
